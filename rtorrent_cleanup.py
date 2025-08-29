@@ -1,9 +1,9 @@
-#!/usr/bin/python
-from __future__ import print_function
+#!/usr/bin/env python3
+# from __future__ import print_function  # not needed in Python 3
 import os
 import shutil
-import bencode
 import argparse
+from bcoding import bdecode
 
 
 args = argparse.Namespace()
@@ -15,11 +15,10 @@ def get_rtorrent_files(path):
     return [os.path.join(path, f) for f in os.listdir(path) if os.path.isfile(os.path.join(path, f)) and os.path.splitext(f)[1] == ".rtorrent"]
 
 def check_if_single_file_torrent(torrent_file_path):
-    #return (path in download_dirs) # old version
     # new version
-    with open (torrent_file_path, "r") as f:
+    with open(torrent_file_path, "rb") as f:
         content = f.read()
-    decoded_content = bencode.decode(content)
+    decoded_content = bdecode(content)
     result = not ("files" in decoded_content["info"])
     return result
 
@@ -45,20 +44,24 @@ def delete_path(path):
 
 
 def format_size(size):
-    if size >= 1024**3: # GB
-        return str(size/(1024**3)) + "GB"
-    if size >= 1024**2: # MB
-        return str(size/(1024**2)) + "MB"
-    if size >= 1024**1: # KB
-        return str(size/(1024**1)) + "KB"
+    if size >= 1024**3:  # GB
+        return str(size // (1024**3)) + "GB"
+    if size >= 1024**2:  # MB
+        return str(size // (1024**2)) + "MB"
+    if size >= 1024**1:  # KB
+        return str(size // (1024**1)) + "KB"
     return str(size) + "B"
 
 def debug(msg):
     if args.debug_flag:
         print(msg)
         if args.pause_on_debug:
-            print("Continue? ", end = "")
-            raw_input()
+            print("Continue? ", end="")
+            input()
+
+def _to_text(b):
+    """Decode bencoded bytes to filesystem text using UTF-8 with surrogateescape."""
+    return b.decode("utf-8", "surrogateescape") if isinstance(b, (bytes, bytearray)) else b
 
 def main(rtorrent_working_dir, rtorrent_download_dirs, dont_confirm=False):
     debug('debug_flag=' + str(args.debug_flag))
@@ -78,27 +81,32 @@ def main(rtorrent_working_dir, rtorrent_download_dirs, dont_confirm=False):
     print("found " + str(len(rtorrent_files)) + " rtorrent files")
 
     for rtorrent_file in rtorrent_files:
-        #debug("rtorrent_file: " + rtorrent_file)
-        content = ""
-        with open (rtorrent_file, "r") as f:
+        debug("rtorrent_file: " + rtorrent_file)
+        content = b""
+        with open(rtorrent_file, "rb") as f:
             content = f.read()
-        if content != "":
-            path = bencode.decode(content)["directory"]
-            # extrect the path to the tied torrent file (not really tied, rather the torrent file with the same name)
-            torrent_file = os.path.splitext(rtorrent_file)[0]
-            if os.path.exists(torrent_file):
-                if check_if_single_file_torrent(torrent_file):
-                    # for "single-file"-torrent the filename has to be taken from the tied torrent_file
-                    with open (torrent_file, "r") as f:
-                        content = f.read()
-                    single_file_name = bencode.decode(content)["info"]["name"]
-                    debug("single-file torrent: " + os.path.join(path, single_file_name))
-                    referenced.append(os.path.join(path, single_file_name))
-                else: 
-                    debug("multi-file torrent: " + path)
-                    referenced.append(path)
-            else:
-                print("ERROR - missing torrent file: '" + torrent_file + "' for rtorrent file '" + rtorrent_file + "'")
+        if content != b"":
+            try:
+                path_b = bdecode(content)["directory"]
+                path = _to_text(path_b)
+                # extract the path to the tied torrent file (same basename)
+                torrent_file = os.path.splitext(rtorrent_file)[0]
+                if os.path.exists(torrent_file):
+                    if check_if_single_file_torrent(torrent_file):
+                        # for single-file torrents take filename from the tied torrent_file
+                        with open(torrent_file, "rb") as f:
+                            content = f.read()
+                        single_file_name_b = bdecode(content)["info"]["name"]
+                        single_file_name = _to_text(single_file_name_b)
+                        debug("single-file torrent: " + os.path.join(path, single_file_name))
+                        referenced.append(os.path.join(path, single_file_name))
+                    else:
+                        debug("multi-file torrent: " + path)
+                        referenced.append(path)
+                else:
+                    print("ERROR - missing torrent file: '" + torrent_file + "' for rtorrent file '" + rtorrent_file + "'")
+            except TypeError as e:
+                print("ERROR - cannot decode rtorrent file '" + rtorrent_file + "': " + str(e))
         else:
             print("ERROR - empty file")
 
@@ -108,7 +116,7 @@ def main(rtorrent_working_dir, rtorrent_download_dirs, dont_confirm=False):
         is_referenced = False
         for p in set(referenced):
             p = os.path.expanduser(p)
-            if os.path.exists(p) and os.path.exists(p) and os.path.samefile(path,p):
+            if os.path.exists(path) and os.path.exists(p) and os.path.samefile(path, p):
                 is_referenced = True
                 break
         if not is_referenced:
@@ -129,9 +137,9 @@ def main(rtorrent_working_dir, rtorrent_download_dirs, dont_confirm=False):
                 print(path)
         else:
             if not dont_confirm:
-                print("unreferenced files will now be deleted (WARNING: DELETED FILES ARE NOT RECOVERABLE) continue? (yes/no) ",end="")
-                input = raw_input()
-            if dont_confirm or input == "yes":
+                print("unreferenced files will now be deleted (WARNING: DELETED FILES ARE NOT RECOVERABLE) continue? (yes/no) ", end="")
+                ans = input()
+            if dont_confirm or ans == "yes":
                 for path in not_referenced:
                     delete_path(path)
     else:
